@@ -13,15 +13,15 @@ import numpy as np
 import pandas as pds
 from utils.dtw_metric import dtw, accelerated_dtw
 from utils.tools import QuantileLoss
-from utils.tools import Diebold_Mariano_test
+from utils.tools import visual_quantile, calculate_quantile
 from utils.augmentation import run_augmentation, run_augmentation_single
 
 warnings.filterwarnings('ignore')
 
 
-class Exp_Long_Term_Forecast(Exp_Basic):
+class Exp_Quantile(Exp_Basic):
     def __init__(self, args):
-        super(Exp_Long_Term_Forecast, self).__init__(args)
+        super(Exp_Quantile, self).__init__(args)
 
     def _build_model(self): # select and create instances in model dict
         model = self.model_dict[self.args.model].Model(self.args).float()
@@ -43,8 +43,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return criterion
     
     def _select_criterion_quantile(self):
-        criterion = QuantileLoss(quantile = self.args.quantile)
+        criterion = QuantileLoss(quantile = self.args.quantile_tau)
         print("It's Quantile regression")
+        print(f"This is {self.args.quantile_tau}")
         return criterion
  
 
@@ -81,7 +82,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
-
+    
     def train(self, setting):
         train_data, train_loader = self._get_data(flag='train')
         vali_data, vali_loader = self._get_data(flag='val')
@@ -96,7 +97,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
-        criterion = self._select_criterion()
+        criterion = self._select_criterion_quantile()
 
         if self.args.use_amp: # Automatic Mixed Precision
             scaler = torch.cuda.amp.GradScaler()
@@ -153,7 +154,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     loss.backward()
                     model_optim.step()
 
-            print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+            #print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
             vali_loss = self.vali(vali_data, vali_loader, criterion)
             test_loss = self.vali(test_data, test_loader, criterion)
@@ -186,7 +187,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model.load_state_dict(torch.load(best_model_path))
 
         return self.model
-
+    
     def test(self, setting, test=0):
         test_data, test_loader = self._get_data(flag='test')
         if test:
@@ -241,49 +242,27 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
-        #print('test shape:', preds.shape, trues.shape)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         print('test shape:', preds.shape, trues.shape)
 
-        pv = preds[:,0,-1]
-        tv = trues[:,0,-1]
-        er = tv - pv
-
-        # dtw calculation
-        if self.args.use_dtw:
-            dtw_list = []
-            manhattan_distance = lambda x, y: np.abs(x - y)
-            for i in range(pv.shape[0]):
-                x = pv[i].reshape(-1, 1)
-                y = tv[i].reshape(-1, 1)
-                #if i % 100 == 0:
-                    #print("calculating dtw iter:", i)
-                d, _, _, _ = accelerated_dtw(x, y, dist=manhattan_distance)
-                dtw_list.append(d)
-            dtw = np.array(dtw_list).mean()
-        else:
-            dtw = 'Not calculated'
-
-        mae, mse, rmse, mape, mspe, r2, pcc, ccc = metric(pv, tv)
-        print('mse:{:.3f}, mae:{:.3f}, rmse:{:.3f}, mape:{:.6f}'.format(mse, mae, rmse, mape))
-        print('dtw:{:.3f}, r2:{:.3f}, pcc:{:.3f}, ccc:{:.3f}'.format(dtw, r2, pcc, ccc))
-        if self.args.save_results_data == 1:
-            fp = f'./results/{self.args.model_id}.csv'
-            df = pds.DataFrame({
-                'trues': tv,
-                'preds': pv,
-                'errors': er
-            })
-            if os.path.exists(fp):
-                print(f"Notice: File {self.args.model_id}.csv already exists, the original file was overwritten.")
-            df.to_csv('./results/{}.csv'.format(self.args.model_id), index = False)
-            print("The test data has been saved successfully in folder 'results' !")
-        else:
-            print("Notice: Test data was not saved in this experiment.")
-
-        visual(tv, pv, er)
-        Diebold_Mariano_test(er, self.args.model_id, self.args)
+        fith = f'./quantile_regression/quantile_{self.args.model_id}.csv'
+        if self.args.quantile_tau > 0 and self.args.quantile_tau < 0.5:
+            lowv = preds[:,0,-1]
+            tv1 = trues[:,0,-1]
+            df = pds.DataFrame({f'lower':lowv, 'trues':tv1})
+            df.to_csv(fith, index = False)
+            print(f"Now the quantile is {self.args.quantile_tau}")
+            print("*" * 90)
+        
+        elif self.args.quantile_tau > 0.5:
+            uppv = preds[:,0,-1]
+            df1 = pds.read_csv(fith)
+            df2 = pds.DataFrame({f'upper':uppv})
+            dff = pds.concat([df1, df2], axis = 1)
+            dff.to_csv(fith, index = False)
+            print(f"Now the quantile is {self.args.quantile_tau}")
+            visual_quantile(fith)
+            calculate_quantile(fith, self.args.quantile)
         
         return
-    

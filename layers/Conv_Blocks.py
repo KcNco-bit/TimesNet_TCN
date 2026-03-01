@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
 
 class Inception_Block_V1(nn.Module):
     def __init__(self, in_channels, out_channels, num_kernels=6, init_weight=True):
@@ -28,7 +28,7 @@ class Inception_Block_V1(nn.Module):
             res_list.append(self.kernels[i](x))
         res = torch.stack(res_list, dim=-1).mean(-1)
         return res
-
+    
 class CausalConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, dilation=1, **kwargs):
         
@@ -74,7 +74,6 @@ class TCN_Module(nn.Module):
         for layer in self.layers:
             x = layer(x)
         return x
-
 
 
 class Inception_Block_V2(nn.Module):
